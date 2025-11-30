@@ -1,9 +1,9 @@
 APP_VERSION = $(shell git describe --abbrev=0 --tags)
 GIT_COMMIT = $(shell git rev-parse --short HEAD)
-BUILD_DATE = $(shell date -u "+%Y%m%d-%H%M")
+BUILD_DATE = $(shell date -u "+%Y-%m-%d")
 VERSION_PKG = upd.dev/upd/cdn-s3-go/version
 DOCKERHUB_IMAGE := xlab/cdn-s3-go
-VERSION_FLAGS="-X $(VERSION_PKG).GitCommit=$(GIT_COMMIT) -X $(VERSION_PKG).BuildDate=$(BUILD_DATE)"
+VERSION_FLAGS="-X $(VERSION_PKG).AppVersion=$(APP_VERSION) -X $(VERSION_PKG).GitCommit=$(GIT_COMMIT) -X $(VERSION_PKG).BuildDate=$(BUILD_DATE)"
 
 # Get the tag from environment variable or use GIT_COMMIT
 TAG ?= $(GIT_COMMIT)
@@ -20,6 +20,7 @@ buildx:
 		--platform linux/amd64 \
 		--build-arg VERSION_FLAGS=$(VERSION_FLAGS) \
 		-t $(DOCKERHUB_IMAGE):$(TAG) \
+		-t $(DOCKERHUB_IMAGE):latest \
 		-f Dockerfile \
 		--load \
 		.

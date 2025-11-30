@@ -1,7 +1,5 @@
 # cdn-s3-go
 
-## Description
-
 This is a service implementing CDN using S3 compatible buckets as backend. It's geo distributed, uses presigned URLs to avoid exposing buckets to public, and most importantly utilizes HTTP 302 redirects to return content without proxying the data.
 
 Key benefits:
@@ -9,6 +7,28 @@ Key benefits:
 * No additional ingress/egress costs - users are pointed directly to S3 buckets.
 * Geo distributed single endpoint, for cases when buckets themselves are not.
 * Low latency for cached requests.
+
+## Running
+
+```bash
+docker run -it --rm xlab/cdn-s3-go
+```
+
+## Building
+
+Native build requires [Go 1.25](https://go.dev/dl/) installed.
+
+```bash
+make install
+```
+
+Docker image build:
+
+```bash
+make buildx
+```
+
+## Configuration
 
 Program accepts list of bucket names as env variable `CDN_BUCKET_PUBLIC_NAMES` like `lfs,avatars`.
 
@@ -41,6 +61,8 @@ CDN_BUCKET_SECRET_ACCESS_KEY_avatars_us=PRIVVVVV
 
 See a fuller example in [.env.example](/.env.example) with multiple buckets in multiple regions.
 
+## Principle of work
+
 It starts a high-performant web server that listens for GET queries and routes public bucket names paths into corresponding S3 buckets.
 
 Example routing: `GET /avatars/user1/a.jpg` gets the bucket `:public_bucket_name` from the first segment of URL, the rest is bucket-related path. It looks for that path in buckets `us` and `eu` in parallel. Then gets a pre-signed URL for that file and issues a HTTP 302 redirect.
@@ -65,7 +87,7 @@ When configured:
 
 Redis connection string format: `redis://[user:password@]host:port/database`
 
-## LICENSE
+## License
 
 Copyright (c) 2025 <xlab@upd.dev>
 
