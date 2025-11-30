@@ -43,6 +43,22 @@ Example routing: `GET /avatars/user1/a.jpg` gets the bucket `:public_bucket_name
 
 Important variable `CDN_BUCKET_PATH_PREFIX_` controls whether files are not in the root of the bucket, but prefixed like `/public` - in this case `/avatars/user1/a.jpg` means "look for /public/user1/a.jpg in bucket avatars".
 
+## Redis Caching (Optional)
+
+To improve performance and reduce S3 API calls, you can enable Redis caching for presigned URLs:
+
+```bash
+CDN_URL_CACHE_REDIS=redis://localhost:6379/0
+```
+
+When configured:
+- Presigned URLs are cached in Redis with key format `<bucket>:<path>`
+- Cache TTL is set to match the Cache-Control header (30 days - 8 hours)
+- Cache lookups happen before S3 HEAD requests
+- If Redis is unavailable or not configured, the service continues without caching
+
+Redis connection string format: `redis://[user:password@]host:port/database`
+
 ## LICENSE
 
 Copyright (c) 2025 <xlab@upd.dev>

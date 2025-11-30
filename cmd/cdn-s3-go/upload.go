@@ -32,14 +32,14 @@ func uploadFile() {
 	if strings.HasPrefix(localFilePath, "~/") {
 		homeDir, err := os.UserHomeDir()
 		if err != nil {
-			log.Fatalf("Failed to expand home directory: %v", err)
+			log.Fatalf("[FATA] Failed to expand home directory: %v", err)
 		}
 		expandedPath = filepath.Join(homeDir, localFilePath[2:])
 	}
 
 	file, err := os.Open(expandedPath)
 	if err != nil {
-		log.Fatalf("Failed to open file: %v", err)
+		log.Fatalf("[FATA] Failed to open file: %v", err)
 	}
 	defer file.Close()
 
@@ -51,7 +51,7 @@ func uploadFile() {
 	secretAccessKey := os.Getenv(fmt.Sprintf("CDN_BUCKET_SECRET_ACCESS_KEY_%s_%s", bucketPublicName, regionAlias))
 
 	if endpoint == "" || region == "" || bucketName == "" || accessKeyID == "" || secretAccessKey == "" {
-		log.Fatalf("Missing configuration for bucket '%s' in region '%s'", bucketPublicName, regionAlias)
+		log.Fatalf("[FATA] Missing configuration for bucket '%s' in region '%s'", bucketPublicName, regionAlias)
 	}
 
 	fullPath := remotePath
@@ -66,17 +66,17 @@ func uploadFile() {
 
 	srv, err := newServer()
 	if err != nil {
-		log.Fatalf("Failed to initialize server config: %v", err)
+		log.Fatalf("[FATA] Failed to initialize server config: %v", err)
 	}
 
 	buckets, ok := srv.buckets[bucketPublicName]
 	if !ok {
-		log.Fatalf("Bucket '%s' not found in configuration", bucketPublicName)
+		log.Fatalf("[FATA] Bucket '%s' not found in configuration", bucketPublicName)
 	}
 
 	bucketCfg, ok := buckets[regionAlias]
 	if !ok {
-		log.Fatalf("Region '%s' not found for bucket '%s'", regionAlias, bucketPublicName)
+		log.Fatalf("[FATA] Region '%s' not found for bucket '%s'", regionAlias, bucketPublicName)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -90,8 +90,8 @@ func uploadFile() {
 	})
 
 	if err != nil {
-		log.Fatalf("Failed to upload file: %v", err)
+		log.Fatalf("[FATA] Failed to upload file: %v", err)
 	}
 
-	log.Printf("Successfully uploaded %s to s3://%s/%s (Content-Type: %s)", expandedPath, bucketName, fullPath, contentType)
+	log.Printf("[INFO] Successfully uploaded %s to s3://%s/%s (Content-Type: %s)", expandedPath, bucketName, fullPath, contentType)
 }

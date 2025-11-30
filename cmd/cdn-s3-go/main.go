@@ -67,7 +67,7 @@ func startServer() {
 
 	srv, err := newServer()
 	if err != nil {
-		log.Fatalf("Failed to load configuration: %v", err)
+		log.Fatalf("[FATA] Failed to load configuration: %v", err)
 	}
 
 	addr := os.Getenv("CDN_LISTEN_ADDR")
@@ -75,11 +75,11 @@ func startServer() {
 		addr = ":8080"
 	}
 
-	log.Printf("Starting CDN server on %s", addr)
-	log.Printf("Serving buckets: %v", srv.bucketPublicNames)
-	log.Printf("Region aliases: %v", srv.regionAliases)
+	log.Printf("[INFO] Starting CDN server on %s", addr)
+	log.Printf("[INFO] Serving buckets: %v", srv.bucketPublicNames)
+	log.Printf("[INFO] Region aliases: %v", srv.regionAliases)
 
 	if err := fasthttp.ListenAndServe(addr, srv.handleRequest); err != nil {
-		log.Fatalf("Error in ListenAndServe: %v", err)
+		log.Fatalf("[FATA] Error in ListenAndServe: %v", err)
 	}
 }

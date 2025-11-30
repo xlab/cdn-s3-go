@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"io/ioutil"
 	"log"
 	"os"
 	"strings"
@@ -15,6 +14,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/redis/go-redis/v9"
 	"github.com/valyala/fasthttp"
 )
 
@@ -32,6 +32,7 @@ type server struct {
 	bucketPublicNames []string
 	regionAliases     []string
 	buckets           map[string]map[string]*bucketConfig
+	redisClient       *redis.Client
 }
 
 func newServer() (*server, error) {
@@ -66,7 +67,7 @@ func newServer() (*server, error) {
 			secretAccessKey := os.Getenv(fmt.Sprintf("CDN_BUCKET_SECRET_ACCESS_KEY_%s_%s", bucketName, regionAlias))
 
 			if endpoint == "" || region == "" || actualBucketName == "" || accessKeyID == "" || secretAccessKey == "" {
-				log.Printf("Warning: Skipping bucket %s region %s due to missing configuration", bucketName, regionAlias)
+				log.Printf("[WARN] Skipping bucket %s region %s due to missing configuration", bucketName, regionAlias)
 				continue
 			}
 
@@ -103,7 +104,27 @@ func newServer() (*server, error) {
 			bucketCfg.Client = s3.NewFromConfig(awsCfg)
 			s.buckets[bucketName][regionAlias] = bucketCfg
 
-			log.Printf("Configured bucket: %s, region: %s, actual bucket name: %s", bucketName, regionAlias, actualBucketName)
+			log.Printf("[INFO] Configured bucket: %s, region: %s, actual bucket name: %s", bucketName, regionAlias, actualBucketName)
+		}
+	}
+
+	redisURL := os.Getenv("CDN_URL_CACHE_REDIS")
+	if redisURL != "" {
+		opt, err := redis.ParseURL(redisURL)
+		if err != nil {
+			log.Printf("[WARN] Failed to parse CDN_URL_CACHE_REDIS: %v", err)
+		} else {
+			s.redisClient = redis.NewClient(opt)
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+
+			if err := s.redisClient.Ping(ctx).Err(); err != nil {
+				log.Printf("[WARN] Failed to connect to Redis: %v", err)
+				s.redisClient.Close()
+				s.redisClient = nil
+			} else {
+				log.Printf("[INFO] Connected to Redis cache")
+			}
 		}
 	}
 
@@ -165,6 +186,8 @@ func (s *server) getPresignedURL(bucketCfg *bucketConfig, objectPath string, exp
 
 // defaultPresignedTTL controls pre-signed URL validity, also TTL for Cache-Control and Redis
 const defaultPresignedTTL = 30 * 24 * time.Hour
+const defaultSlowRequestThreshold = 5 * time.Second
+const defaultFastRequestThreshold = 500 * time.Millisecond
 
 func (s *server) handleRequest(ctx *fasthttp.RequestCtx) {
 	path := string(ctx.Path())
@@ -179,6 +202,42 @@ func (s *server) handleRequest(ctx *fasthttp.RequestCtx) {
 	bucketName := parts[0]
 	objectPath := parts[1]
 
+	var cacheKey string
+	if s.redisClient != nil {
+		cacheKey = fmt.Sprintf("%s:%s", bucketName, objectPath)
+
+		redisCtx, cancel := context.WithTimeout(context.Background(), defaultFastRequestThreshold)
+		result, err := s.redisClient.HMGet(redisCtx, cacheKey, "url", "exp").Result()
+		cancel()
+
+		if err == nil && len(result) == 2 && result[0] != nil && result[1] != nil {
+			cachedURL, urlOk := result[0].(string)
+			expStr, expOk := result[1].(string)
+
+			if urlOk && expOk && cachedURL != "" {
+				var expTimestamp int64
+				_, scanErr := fmt.Sscanf(expStr, "%d", &expTimestamp)
+				if scanErr != nil {
+					go func() {
+						// TODO: catch
+
+						log.Printf("[WARN] Failed to parse Redis cache expiry for key %s: %v", cacheKey, scanErr)
+						delCtx, delCancel := context.WithTimeout(context.Background(), defaultSlowRequestThreshold)
+						s.redisClient.Del(delCtx, cacheKey)
+						delCancel()
+					}()
+				} else {
+					timeLeft := expTimestamp - time.Now().Unix()
+					if timeLeft > 0 {
+						ctx.Response.Header.Set("Cache-Control", fmt.Sprintf("max-age=%d", timeLeft))
+						ctx.Redirect(cachedURL, fasthttp.StatusFound)
+						return
+					}
+				}
+			}
+		}
+	}
+
 	bucketCfg, fullPath, err := s.findObject(bucketName, objectPath)
 	if err != nil {
 		ctx.Error("Object not found", fasthttp.StatusNotFound)
@@ -187,12 +246,30 @@ func (s *server) handleRequest(ctx *fasthttp.RequestCtx) {
 
 	presignedURL, err := s.getPresignedURL(bucketCfg, fullPath, defaultPresignedTTL)
 	if err != nil {
-		log.Printf("Error generating presigned URL: %v", err)
+		log.Printf("[WARN] Error generating presigned URL: %v", err)
 		ctx.Error("Internal server error", fasthttp.StatusInternalServerError)
 		return
 	}
 
 	cacheMaxAge := int((defaultPresignedTTL - 8*time.Hour).Seconds())
+	if s.redisClient != nil {
+		go func() {
+			// TODO: catch
+
+			redisTTL := time.Second * time.Duration(cacheMaxAge)
+			expTimestamp := time.Now().Add(redisTTL).Unix()
+
+			redisCtx, cancel := context.WithTimeout(context.Background(), defaultSlowRequestThreshold)
+			err := s.redisClient.HSet(redisCtx, cacheKey, "url", presignedURL, "exp", expTimestamp).Err()
+			if err != nil {
+				log.Printf("[WARN] Failed to cache URL in Redis: %v", err)
+			} else {
+				s.redisClient.Expire(redisCtx, cacheKey, redisTTL)
+			}
+			cancel()
+		}()
+	}
+
 	ctx.Response.Header.Set("Cache-Control", fmt.Sprintf("max-age=%d", cacheMaxAge))
 	ctx.Redirect(presignedURL, fasthttp.StatusFound)
 }
@@ -200,7 +277,7 @@ func (s *server) handleRequest(ctx *fasthttp.RequestCtx) {
 // readEnv is a special utility that reads `.env` file into actual environment variables
 // of the current app, similar to `dotenv` Node package.
 func readEnv() {
-	if envdata, _ := ioutil.ReadFile(".env"); len(envdata) > 0 {
+	if envdata, _ := os.ReadFile(".env"); len(envdata) > 0 {
 		s := bufio.NewScanner(bytes.NewReader(envdata))
 		for s.Scan() {
 			txt := s.Text()
