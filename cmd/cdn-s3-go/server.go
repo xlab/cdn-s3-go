@@ -4,10 +4,12 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -52,8 +54,15 @@ func newServer() (*server, error) {
 		buckets:           make(map[string]map[string]*bucketConfig),
 	}
 
+	for i, regionAlias := range s.regionAliases {
+		s.regionAliases[i] = strings.TrimSpace(regionAlias)
+	}
+
+	for i, bucketPublicName := range s.bucketPublicNames {
+		s.bucketPublicNames[i] = strings.TrimSpace(bucketPublicName)
+	}
+
 	for _, bucketName := range s.bucketPublicNames {
-		bucketName = strings.TrimSpace(bucketName)
 		s.buckets[bucketName] = make(map[string]*bucketConfig)
 
 		for _, regionAlias := range s.regionAliases {
@@ -110,25 +119,39 @@ func newServer() (*server, error) {
 
 	redisURL := os.Getenv("CDN_URL_CACHE_REDIS")
 	if redisURL != "" {
-		opt, err := redis.ParseURL(redisURL)
-		if err != nil {
-			log.Printf("[WARN] Failed to parse CDN_URL_CACHE_REDIS: %v", err)
-		} else {
-			s.redisClient = redis.NewClient(opt)
-			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-			defer cancel()
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("[WARN] Redis initialization panicked: %v", r)
+					s.redisClient = nil
+				}
+			}()
 
-			if err := s.redisClient.Ping(ctx).Err(); err != nil {
-				log.Printf("[WARN] Failed to connect to Redis: %v", err)
-				s.redisClient.Close()
-				s.redisClient = nil
+			opt, err := redis.ParseURL(redisURL)
+			if err != nil {
+				log.Printf("[WARN] Failed to parse CDN_URL_CACHE_REDIS: %v", err)
 			} else {
-				log.Printf("[INFO] Connected to Redis cache")
+				s.redisClient = redis.NewClient(opt)
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+
+				if err := s.redisClient.Ping(ctx).Err(); err != nil {
+					log.Printf("[WARN] Failed to connect to Redis: %v", err)
+					s.redisClient.Close()
+					s.redisClient = nil
+				} else {
+					log.Printf("[INFO] Connected to Redis cache")
+				}
 			}
-		}
+		}()
 	}
 
 	return s, nil
+}
+
+type findResult struct {
+	config   *bucketConfig
+	fullPath string
 }
 
 func (s *server) findObject(bucketName, objectPath string) (*bucketConfig, string, error) {
@@ -137,10 +160,22 @@ func (s *server) findObject(bucketName, objectPath string) (*bucketConfig, strin
 		return nil, "", fmt.Errorf("bucket %s not found", bucketName)
 	}
 
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	resultChan := make(chan findResult, len(s.regionAliases))
+	wg := new(sync.WaitGroup)
+	wg.Add(len(s.regionAliases))
+
+	go func() {
+		wg.Wait()
+		close(resultChan)
+	}()
+
 	for _, regionAlias := range s.regionAliases {
-		regionAlias = strings.TrimSpace(regionAlias)
 		bucketCfg, ok := buckets[regionAlias]
 		if !ok {
+			wg.Done()
 			continue
 		}
 
@@ -149,25 +184,59 @@ func (s *server) findObject(bucketName, objectPath string) (*bucketConfig, strin
 			fullPath = strings.TrimPrefix(bucketCfg.PathPrefix, "/") + "/" + strings.TrimPrefix(objectPath, "/")
 		}
 
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		_, err := bucketCfg.Client.HeadObject(ctx, &s3.HeadObjectInput{
-			Bucket: aws.String(bucketCfg.BucketName),
-			Key:    aws.String(fullPath),
-		})
-		cancel()
+		go func(regionAlias string, cfg *bucketConfig, path string) {
+			defer wg.Done()
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("[WARN] findObject goroutine panicked on bucket %s (region %s): %v", cfg.BucketName, regionAlias, r)
+				}
+			}()
 
-		if err == nil {
-			return bucketCfg, fullPath, nil
-		}
+			headCtx, headCancel := context.WithTimeout(ctx, defaultSlowRequestThreshold)
+			defer headCancel()
+
+			_, err := cfg.Client.HeadObject(headCtx, &s3.HeadObjectInput{
+				Bucket: aws.String(cfg.BucketName),
+				Key:    aws.String(path),
+			})
+
+			if err == nil {
+				resultChan <- findResult{config: cfg, fullPath: path}
+				return
+			}
+		}(regionAlias, bucketCfg, fullPath)
 	}
 
-	return nil, "", fmt.Errorf("object not found in any region")
+	// blocks until 1 found result, ErrNotFound if no results or a timeout
+	for {
+		select {
+		case result, ok := <-resultChan:
+			if !ok {
+				// channels is closed - all parallel lookups are done
+				return nil, "", ErrNotFound
+			}
+			// return immediately (cancels ctx and all ongoing requests, discards any channel results)
+			go drainChain(resultChan)
+			return result.config, result.fullPath, nil
+
+		case <-time.After(defaultSlowRequestThreshold):
+			go drainChain(resultChan)
+			return nil, "", ErrNotFound
+		}
+	}
 }
+
+func drainChain(c <-chan findResult) {
+	for range c {
+	}
+}
+
+var ErrNotFound = errors.New("not found")
 
 func (s *server) getPresignedURL(bucketCfg *bucketConfig, objectPath string, expiry time.Duration) (string, error) {
 	presignClient := s3.NewPresignClient(bucketCfg.Client)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), defaultSlowRequestThreshold)
 	defer cancel()
 
 	req, err := presignClient.PresignGetObject(ctx, &s3.GetObjectInput{
@@ -219,12 +288,17 @@ func (s *server) handleRequest(ctx *fasthttp.RequestCtx) {
 				_, scanErr := fmt.Sscanf(expStr, "%d", &expTimestamp)
 				if scanErr != nil {
 					go func() {
-						// TODO: catch
+						defer func() {
+							if r := recover(); r != nil {
+								log.Printf("[WARN] Redis cache deletion panicked for key %s: %v", cacheKey, r)
+							}
+						}()
 
 						log.Printf("[WARN] Failed to parse Redis cache expiry for key %s: %v", cacheKey, scanErr)
 						delCtx, delCancel := context.WithTimeout(context.Background(), defaultSlowRequestThreshold)
-						s.redisClient.Del(delCtx, cacheKey)
-						delCancel()
+						defer delCancel()
+
+						_ = s.redisClient.Del(delCtx, cacheKey)
 					}()
 				} else {
 					timeLeft := expTimestamp - time.Now().Unix()
@@ -254,19 +328,24 @@ func (s *server) handleRequest(ctx *fasthttp.RequestCtx) {
 	cacheMaxAge := int((defaultPresignedTTL - 8*time.Hour).Seconds())
 	if s.redisClient != nil {
 		go func() {
-			// TODO: catch
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("[WARN] Redis cache storage panicked for key %s: %v", cacheKey, r)
+				}
+			}()
 
 			redisTTL := time.Second * time.Duration(cacheMaxAge)
 			expTimestamp := time.Now().Add(redisTTL).Unix()
 
 			redisCtx, cancel := context.WithTimeout(context.Background(), defaultSlowRequestThreshold)
+			defer cancel()
+
 			err := s.redisClient.HSet(redisCtx, cacheKey, "url", presignedURL, "exp", expTimestamp).Err()
 			if err != nil {
 				log.Printf("[WARN] Failed to cache URL in Redis: %v", err)
 			} else {
-				s.redisClient.Expire(redisCtx, cacheKey, redisTTL)
+				_ = s.redisClient.Expire(redisCtx, cacheKey, redisTTL)
 			}
-			cancel()
 		}()
 	}
 
