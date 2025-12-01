@@ -1,6 +1,6 @@
-# cdn-s3-go [![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/AhcqMv?referralCode=2ZivV-&utm_medium=integration&utm_source=template&utm_campaign=generic)
+# cdn-s3-go <a href="https://railway.com/deploy/AhcqMv?referralCode=2ZivV-&utm_medium=integration&utm_source=template&utm_campaign=generic"><img src="https://railway.com/button.svg" alt="Deploy on Railway" align="right"></a>
 
-<a href="/docs/diagram.png"><img alt="architecture diagram" src="/docs/diagram.png" width="300px"/></a>
+<a href="/docs/diagram.png"><img alt="architecture diagram" src="/docs/diagram.png" width="512px"/></a>
 
 This is a service implementing CDN using S3 compatible buckets as backend. It's geo distributed, uses presigned URLs to avoid exposing buckets to public, and most importantly utilizes HTTP 302 redirects to return content without proxying the data.
 
@@ -9,6 +9,7 @@ Key benefits:
 * No additional ingress/egress costs - users are pointed directly to S3 buckets.
 * Geo distributed single endpoint, for cases when buckets themselves are not.
 * Low latency for cached requests.
+* Absolutely no extra dependencies.
 
 ## Running
 
