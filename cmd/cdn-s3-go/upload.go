@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"mime"
 	"os"
 	"path/filepath"
@@ -32,14 +32,16 @@ func uploadFile() {
 	if strings.HasPrefix(localFilePath, "~/") {
 		homeDir, err := os.UserHomeDir()
 		if err != nil {
-			log.Fatalf("[FATA] Failed to expand home directory: %v", err)
+			slog.Error("failed to expand home directory", "error", err)
+			os.Exit(1)
 		}
 		expandedPath = filepath.Join(homeDir, localFilePath[2:])
 	}
 
 	file, err := os.Open(expandedPath)
 	if err != nil {
-		log.Fatalf("[FATA] Failed to open file: %v", err)
+		slog.Error("failed to open file", "error", err)
+		os.Exit(1)
 	}
 	defer file.Close()
 
@@ -51,7 +53,8 @@ func uploadFile() {
 	secretAccessKey := os.Getenv(fmt.Sprintf("CDN_BUCKET_SECRET_ACCESS_KEY_%s_%s", bucketPublicName, regionAlias))
 
 	if endpoint == "" || region == "" || bucketName == "" || accessKeyID == "" || secretAccessKey == "" {
-		log.Fatalf("[FATA] Missing configuration for bucket '%s' in region '%s'", bucketPublicName, regionAlias)
+		slog.Error("missing configuration for bucket", "bucket", bucketPublicName, "region", regionAlias)
+		os.Exit(1)
 	}
 
 	fullPath := remotePath
@@ -66,17 +69,20 @@ func uploadFile() {
 
 	srv, err := newServer()
 	if err != nil {
-		log.Fatalf("[FATA] Failed to initialize server config: %v", err)
+		slog.Error("failed to initialize server config", "error", err)
+		os.Exit(1)
 	}
 
 	buckets, ok := srv.buckets[bucketPublicName]
 	if !ok {
-		log.Fatalf("[FATA] Bucket '%s' not found in configuration", bucketPublicName)
+		slog.Error("bucket not found in configuration", "bucket", bucketPublicName)
+		os.Exit(1)
 	}
 
 	bucketCfg, ok := buckets[regionAlias]
 	if !ok {
-		log.Fatalf("[FATA] Region '%s' not found for bucket '%s'", regionAlias, bucketPublicName)
+		slog.Error("region not found for bucket", "region", regionAlias, "bucket", bucketPublicName)
+		os.Exit(1)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -90,8 +96,9 @@ func uploadFile() {
 	})
 
 	if err != nil {
-		log.Fatalf("[FATA] Failed to upload file: %v", err)
+		slog.Error("failed to upload file", "error", err)
+		os.Exit(1)
 	}
 
-	log.Printf("[INFO] Successfully uploaded %s to s3://%s/%s (Content-Type: %s)", expandedPath, bucketName, fullPath, contentType)
+	slog.Info("successfully uploaded file", "local_path", expandedPath, "bucket", bucketName, "remote_path", fullPath, "content_type", contentType)
 }

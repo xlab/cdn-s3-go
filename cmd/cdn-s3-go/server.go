@@ -6,7 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"strings"
 	"sync"
@@ -76,7 +76,7 @@ func newServer() (*server, error) {
 			secretAccessKey := os.Getenv(fmt.Sprintf("CDN_BUCKET_SECRET_ACCESS_KEY_%s_%s", bucketName, regionAlias))
 
 			if endpoint == "" || region == "" || actualBucketName == "" || accessKeyID == "" || secretAccessKey == "" {
-				log.Printf("[WARN] Skipping bucket %s region %s due to missing configuration", bucketName, regionAlias)
+				slog.Warn("skipping bucket due to missing configuration", "bucket", bucketName, "region", regionAlias)
 				continue
 			}
 
@@ -113,7 +113,7 @@ func newServer() (*server, error) {
 			bucketCfg.Client = s3.NewFromConfig(awsCfg)
 			s.buckets[bucketName][regionAlias] = bucketCfg
 
-			log.Printf("[INFO] Configured bucket: %s, region: %s, actual bucket name: %s", bucketName, regionAlias, actualBucketName)
+			slog.Info("configured bucket", "bucket", bucketName, "region", regionAlias, "actual_bucket_name", actualBucketName)
 		}
 	}
 
@@ -122,25 +122,25 @@ func newServer() (*server, error) {
 		func() {
 			defer func() {
 				if r := recover(); r != nil {
-					log.Printf("[WARN] Redis initialization panicked: %v", r)
+					slog.Warn("redis initialization panicked", "error", r)
 					s.redisClient = nil
 				}
 			}()
 
 			opt, err := redis.ParseURL(redisURL)
 			if err != nil {
-				log.Printf("[WARN] Failed to parse CDN_URL_CACHE_REDIS: %v", err)
+				slog.Warn("failed to parse redis URL", "error", err)
 			} else {
 				s.redisClient = redis.NewClient(opt)
 				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 				defer cancel()
 
 				if err := s.redisClient.Ping(ctx).Err(); err != nil {
-					log.Printf("[WARN] Failed to connect to Redis: %v", err)
+					slog.Warn("failed to connect to redis", "error", err)
 					s.redisClient.Close()
 					s.redisClient = nil
 				} else {
-					log.Printf("[INFO] Connected to Redis cache")
+					slog.Info("connected to redis cache")
 				}
 			}
 		}()
@@ -188,7 +188,7 @@ func (s *server) findObject(bucketName, objectPath string) (*bucketConfig, strin
 			defer wg.Done()
 			defer func() {
 				if r := recover(); r != nil {
-					log.Printf("[WARN] findObject goroutine panicked on bucket %s (region %s): %v", cfg.BucketName, regionAlias, r)
+					slog.Warn("findObject goroutine panicked", "bucket", cfg.BucketName, "region", regionAlias, "error", r)
 				}
 			}()
 
@@ -297,11 +297,11 @@ func (s *server) handleRequest(ctx *fasthttp.RequestCtx) {
 					go func() {
 						defer func() {
 							if r := recover(); r != nil {
-								log.Printf("[WARN] Redis cache deletion panicked for key %s: %v", cacheKey, r)
+								slog.Warn("redis cache deletion panicked", "cache_key", cacheKey, "error", r)
 							}
 						}()
 
-						log.Printf("[WARN] Failed to parse Redis cache expiry for key %s: %v", cacheKey, scanErr)
+						slog.Warn("failed to parse redis cache expiry", "cache_key", cacheKey, "error", scanErr)
 						delCtx, delCancel := context.WithTimeout(context.Background(), defaultSlowRequestThreshold)
 						defer delCancel()
 
@@ -327,7 +327,7 @@ func (s *server) handleRequest(ctx *fasthttp.RequestCtx) {
 
 	presignedURL, err := s.getPresignedURL(bucketCfg, fullPath, defaultPresignedTTL)
 	if err != nil {
-		log.Printf("[WARN] Error generating presigned URL: %v", err)
+		slog.Warn("error generating presigned URL", "error", err)
 		ctx.Error("Internal server error", fasthttp.StatusInternalServerError)
 		return
 	}
@@ -337,7 +337,7 @@ func (s *server) handleRequest(ctx *fasthttp.RequestCtx) {
 		go func() {
 			defer func() {
 				if r := recover(); r != nil {
-					log.Printf("[WARN] Redis cache storage panicked for key %s: %v", cacheKey, r)
+					slog.Warn("redis cache storage panicked", "cache_key", cacheKey, "error", r)
 				}
 			}()
 
@@ -349,7 +349,7 @@ func (s *server) handleRequest(ctx *fasthttp.RequestCtx) {
 
 			err := s.redisClient.HSet(redisCtx, cacheKey, "url", presignedURL, "exp", expTimestamp).Err()
 			if err != nil {
-				log.Printf("[WARN] Failed to cache URL in Redis: %v", err)
+				slog.Warn("failed to cache URL in redis", "error", err)
 			} else {
 				_ = s.redisClient.Expire(redisCtx, cacheKey, redisTTL)
 			}

@@ -2,7 +2,7 @@ package main
 
 import (
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 
 	"upd.dev/upd/cdn-s3-go/version"
@@ -67,7 +67,8 @@ func startServer() {
 
 	srv, err := newServer()
 	if err != nil {
-		log.Fatalf("[FATA] Failed to load configuration: %v", err)
+		slog.Error("failed to load configuration", "error", err)
+		os.Exit(1)
 	}
 
 	addr := os.Getenv("CDN_LISTEN_ADDR")
@@ -75,11 +76,12 @@ func startServer() {
 		addr = ":8080"
 	}
 
-	log.Printf("[INFO] Starting CDN server on %s", addr)
-	log.Printf("[INFO] Serving buckets: %v", srv.bucketPublicNames)
-	log.Printf("[INFO] Region aliases: %v", srv.regionAliases)
+	slog.Info("starting CDN server", "addr", addr)
+	slog.Info("serving buckets", "buckets", srv.bucketPublicNames)
+	slog.Info("region aliases", "regions", srv.regionAliases)
 
 	if err := fasthttp.ListenAndServe(addr, srv.handleRequest); err != nil {
-		log.Fatalf("[FATA] Error in ListenAndServe: %v", err)
+		slog.Error("error in ListenAndServe", "error", err)
+		os.Exit(1)
 	}
 }

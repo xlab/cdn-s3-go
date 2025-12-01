@@ -20,7 +20,7 @@
 
 - Standard Go formatting (use `go fmt`)
 - Imports: stdlib first, then external packages (AWS SDK, Redis, fasthttp), then internal (upd.dev/upd/cdn-s3-go/version)
-- Error handling: return errors up the stack, log with [INFO], [WARN], [FATA] prefixes
+- Error handling: return errors up the stack, log with golang standard slog
 - Naming: camelCase for unexported, PascalCase for exported; descriptive names (bucketConfig, handleRequest)
 - Environment variables: CDN_* prefix, uppercase with underscores
 - Constants: descriptive names with units (defaultPresignedTTL =)
