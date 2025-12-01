@@ -11,6 +11,22 @@ import (
 )
 
 func main() {
+	forceJSON := os.Getenv("CDN_LOG_FORCE_JSON")
+	isInteractive := false
+
+	if stat, err := os.Stdout.Stat(); err == nil {
+		isInteractive = (stat.Mode() & os.ModeCharDevice) != 0
+	}
+
+	var handler slog.Handler
+	if forceJSON == "true" || forceJSON == "1" || !isInteractive {
+		handler = slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+			Level: slog.LevelInfo,
+		})
+
+		slog.SetDefault(slog.New(handler))
+	}
+
 	if len(os.Args) < 2 {
 		printBanner()
 		os.Exit(0)
