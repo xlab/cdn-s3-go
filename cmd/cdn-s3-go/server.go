@@ -260,11 +260,18 @@ const defaultFastRequestThreshold = 500 * time.Millisecond
 
 func (s *server) handleRequest(ctx *fasthttp.RequestCtx) {
 	path := string(ctx.Path())
+
+	if path == "/health" {
+		ctx.SetStatusCode(200)
+		ctx.SetBodyString("OK")
+		return
+	}
+
 	path = strings.TrimPrefix(path, "/")
 
 	parts := strings.SplitN(path, "/", 2)
 	if len(parts) < 2 {
-		ctx.Error("Invalid path format", fasthttp.StatusBadRequest)
+		ctx.Error("Not found", fasthttp.StatusNotFound)
 		return
 	}
 
@@ -314,7 +321,7 @@ func (s *server) handleRequest(ctx *fasthttp.RequestCtx) {
 
 	bucketCfg, fullPath, err := s.findObject(bucketName, objectPath)
 	if err != nil {
-		ctx.Error("Object not found", fasthttp.StatusNotFound)
+		ctx.Error("Not found", fasthttp.StatusNotFound)
 		return
 	}
 
