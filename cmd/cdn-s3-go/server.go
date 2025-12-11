@@ -233,16 +233,36 @@ func drainChain(c <-chan findResult) {
 
 var ErrNotFound = errors.New("not found")
 
-func (s *server) getPresignedURL(bucketCfg *bucketConfig, objectPath string, expiry time.Duration) (string, error) {
+func (s *server) getPresignedURL(bucketCfg *bucketConfig, objectPath string, expiry time.Duration, queryArgs *fasthttp.Args) (string, error) {
 	presignClient := s3.NewPresignClient(bucketCfg.Client)
 
 	ctx, cancel := context.WithTimeout(context.Background(), defaultSlowRequestThreshold)
 	defer cancel()
 
-	req, err := presignClient.PresignGetObject(ctx, &s3.GetObjectInput{
+	input := &s3.GetObjectInput{
 		Bucket: aws.String(bucketCfg.BucketName),
 		Key:    aws.String(objectPath),
-	}, func(opts *s3.PresignOptions) {
+	}
+
+	if queryArgs != nil {
+		if v := queryArgs.Peek("response-cache-control"); checkOverrideSanity(v) {
+			input.ResponseCacheControl = aws.String(string(v))
+		}
+		if v := queryArgs.Peek("response-content-disposition"); checkOverrideSanity(v) {
+			input.ResponseContentDisposition = aws.String(string(v))
+		}
+		if v := queryArgs.Peek("response-content-encoding"); checkOverrideSanity(v) {
+			input.ResponseContentEncoding = aws.String(string(v))
+		}
+		if v := queryArgs.Peek("response-content-language"); checkOverrideSanity(v) {
+			input.ResponseContentLanguage = aws.String(string(v))
+		}
+		if v := queryArgs.Peek("response-content-type"); checkOverrideSanity(v) {
+			input.ResponseContentType = aws.String(string(v))
+		}
+	}
+
+	req, err := presignClient.PresignGetObject(ctx, input, func(opts *s3.PresignOptions) {
 		opts.Expires = expiry
 	})
 
@@ -251,6 +271,10 @@ func (s *server) getPresignedURL(bucketCfg *bucketConfig, objectPath string, exp
 	}
 
 	return req.URL, nil
+}
+
+func checkOverrideSanity(value []byte) bool {
+	return len(value) > 0 && len(value) <= 1024
 }
 
 // defaultPresignedTTL controls pre-signed URL validity, also TTL for Cache-Control and Redis
@@ -325,7 +349,7 @@ func (s *server) handleRequest(ctx *fasthttp.RequestCtx) {
 		return
 	}
 
-	presignedURL, err := s.getPresignedURL(bucketCfg, fullPath, defaultPresignedTTL)
+	presignedURL, err := s.getPresignedURL(bucketCfg, fullPath, defaultPresignedTTL, ctx.QueryArgs())
 	if err != nil {
 		slog.Warn("error generating presigned URL", "error", err)
 		ctx.Error("Internal server error", fasthttp.StatusInternalServerError)
