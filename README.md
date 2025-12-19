@@ -83,7 +83,7 @@ CDN_URL_CACHE_REDIS=redis://localhost:6379/0
 When configured:
 
 * Presigned URLs are cached in Redis with key format `<bucket>:<path>`
-* Cache TTL is set to match the Cache-Control header (30 days - 8 hours)
+* Cache TTL is set to match the Cache-Control header (7 days - 8 hours)
 * Cache lookups happen before S3 HEAD requests
 * If Redis is unavailable or not configured, the service continues without caching
 * Items loaded from cache have a proper expiration date, so Cache-Control header is set correctly

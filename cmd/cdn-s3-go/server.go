@@ -278,7 +278,9 @@ func checkOverrideSanity(value []byte) bool {
 }
 
 // defaultPresignedTTL controls pre-signed URL validity, also TTL for Cache-Control and Redis
-const defaultPresignedTTL = 30 * 24 * time.Hour
+// Note: The maximum expiration time for an AWS S3 presigned URL using Signature Version 4 (SigV4) is 7 days
+// See: https://docs.aws.amazon.com/AmazonS3/latest/API/sigv4-query-string-auth.html
+const defaultPresignedTTL = 7 * 24 * time.Hour
 const defaultSlowRequestThreshold = 5 * time.Second
 const defaultFastRequestThreshold = 500 * time.Millisecond
 
