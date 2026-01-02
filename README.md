@@ -1,4 +1,4 @@
-# cdn-s3-go <a href="https://railway.com/deploy/AhcqMv?referralCode=2ZivV-&utm_medium=integration&utm_source=template&utm_campaign=generic"><img src="https://railway.com/button.svg" alt="Deploy on Railway" align="right"></a>
+# cdn-s3-go <a href="https://railway.com/deploy/AhcqMv?referralCode=upd"><img src="https://railway.com/button.svg" alt="Deploy on Railway" align="right"></a>
 
 <a href="/docs/diagram.png"><img alt="architecture diagram" src="/docs/diagram.png" width="512px"/></a>
 
