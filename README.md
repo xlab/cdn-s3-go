@@ -19,7 +19,7 @@ docker run -it --rm xlab/cdn-s3-go
 
 ## Building
 
-Native build requires [Go 1.25](https://go.dev/dl/) installed.
+Native build requires [Go 1.26](https://go.dev/dl/) installed.
 
 ```bash
 make install
