@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -35,6 +36,16 @@ type server struct {
 	regionAliases     []string
 	buckets           map[string]map[string]*bucketConfig
 	redisClient       *redis.Client
+	cors              corsConfig
+}
+
+type corsConfig struct {
+	AllowOrigin      string
+	AllowMethods     string
+	AllowHeaders     string
+	ExposeHeaders    string
+	AllowCredentials bool
+	MaxAgeSeconds    int
 }
 
 func newServer() (*server, error) {
@@ -52,6 +63,7 @@ func newServer() (*server, error) {
 		bucketPublicNames: strings.Split(publicNames, ","),
 		regionAliases:     strings.Split(regionAliases, ","),
 		buckets:           make(map[string]map[string]*bucketConfig),
+		cors:              loadCORSConfig(),
 	}
 
 	for i, regionAlias := range s.regionAliases {
@@ -147,6 +159,69 @@ func newServer() (*server, error) {
 	}
 
 	return s, nil
+}
+
+func loadCORSConfig() corsConfig {
+	permissive := readEnvBool("CDN_CORS_PERMISSIVE", false)
+
+	cfg := corsConfig{
+		AllowOrigin:      readEnvString("CDN_CORS_ALLOW_ORIGIN", "*"),
+		AllowMethods:     readEnvString("CDN_CORS_ALLOW_METHODS", "GET,HEAD,OPTIONS"),
+		AllowHeaders:     readEnvString("CDN_CORS_ALLOW_HEADERS", "*"),
+		ExposeHeaders:    readEnvString("CDN_CORS_EXPOSE_HEADERS", "Location,Cache-Control"),
+		AllowCredentials: readEnvBool("CDN_CORS_ALLOW_CREDENTIALS", false),
+		MaxAgeSeconds:    readEnvInt("CDN_CORS_MAX_AGE", 86400),
+	}
+
+	if permissive {
+		cfg.AllowOrigin = "*"
+		cfg.AllowMethods = "GET,HEAD,OPTIONS,PUT,POST,PATCH,DELETE"
+		cfg.AllowHeaders = "*"
+		cfg.ExposeHeaders = "*"
+		cfg.AllowCredentials = false
+	}
+
+	return cfg
+}
+
+func readEnvString(name, fallback string) string {
+	value := strings.TrimSpace(os.Getenv(name))
+	if value == "" {
+		return fallback
+	}
+	return value
+}
+
+func readEnvBool(name string, fallback bool) bool {
+	value := strings.TrimSpace(strings.ToLower(os.Getenv(name)))
+	if value == "" {
+		return fallback
+	}
+
+	switch value {
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	default:
+		slog.Warn("invalid boolean value in env, using fallback", "name", name, "value", value, "fallback", fallback)
+		return fallback
+	}
+}
+
+func readEnvInt(name string, fallback int) int {
+	value := strings.TrimSpace(os.Getenv(name))
+	if value == "" {
+		return fallback
+	}
+
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed < 0 {
+		slog.Warn("invalid integer value in env, using fallback", "name", name, "value", value, "fallback", fallback)
+		return fallback
+	}
+
+	return parsed
 }
 
 type findResult struct {
@@ -285,6 +360,13 @@ const defaultSlowRequestThreshold = 5 * time.Second
 const defaultFastRequestThreshold = 500 * time.Millisecond
 
 func (s *server) handleRequest(ctx *fasthttp.RequestCtx) {
+	defer s.applyCORSHeaders(ctx)
+
+	if string(ctx.Method()) == fasthttp.MethodOptions {
+		ctx.SetStatusCode(fasthttp.StatusNoContent)
+		return
+	}
+
 	path := string(ctx.Path())
 
 	if path == "/health" {
@@ -384,6 +466,24 @@ func (s *server) handleRequest(ctx *fasthttp.RequestCtx) {
 
 	ctx.Response.Header.Set("Cache-Control", fmt.Sprintf("max-age=%d", cacheMaxAge))
 	ctx.Redirect(presignedURL, fasthttp.StatusFound)
+}
+
+func (s *server) applyCORSHeaders(ctx *fasthttp.RequestCtx) {
+	ctx.Response.Header.Set("Access-Control-Allow-Origin", s.cors.AllowOrigin)
+	ctx.Response.Header.Set("Access-Control-Allow-Methods", s.cors.AllowMethods)
+	ctx.Response.Header.Set("Access-Control-Allow-Headers", s.cors.AllowHeaders)
+
+	if s.cors.ExposeHeaders != "" {
+		ctx.Response.Header.Set("Access-Control-Expose-Headers", s.cors.ExposeHeaders)
+	}
+
+	if s.cors.MaxAgeSeconds > 0 {
+		ctx.Response.Header.Set("Access-Control-Max-Age", strconv.Itoa(s.cors.MaxAgeSeconds))
+	}
+
+	if s.cors.AllowCredentials {
+		ctx.Response.Header.Set("Access-Control-Allow-Credentials", "true")
+	}
 }
 
 // readEnv is a special utility that reads `.env` file into actual environment variables
